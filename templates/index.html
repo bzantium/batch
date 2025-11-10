@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 95%;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header .dataset-info {
+            opacity: 0.9;
+            font-size: 0.95em;
+        }
+
+        .dataset-selector {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+        }
+
+        .dataset-selector h3 {
+            font-size: 1em;
+            margin-bottom: 10px;
+            opacity: 0.9;
+        }
+
+        .dataset-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .dataset-btn {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 0.9em;
+            word-break: break-all;
+            max-width: 400px;
+        }
+
+        .dataset-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+        }
+
+        .dataset-btn.active {
+            background: white;
+            color: #667eea;
+            border-color: white;
+            font-weight: 600;
+        }
+
+        .dataset-btn.loading {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls input[type="number"] {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            width: 150px;
+            transition: border-color 0.3s;
+        }
+
+        .controls input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .controls button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .controls button:hover {
+            background: #5568d3;
+        }
+
+        .controls button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .controls .search-box {
+            flex: 1;
+            min-width: 200px;
+            position: relative;
+        }
+
+        .controls .search-box input {
+            width: 100%;
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        .content {
+            padding: 30px;
+            overflow-x: auto;
+        }
+
+        .row-info {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .row-info .label {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .messages-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            table-layout: fixed;
+        }
+
+        .messages-table th {
+            background: #667eea;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
+
+        .messages-table th:first-child {
+            width: 100px;
+        }
+
+        .messages-table th:not(:first-child) {
+            width: 25%;
+        }
+
+        .messages-table td {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+            vertical-align: top;
+            overflow-wrap: break-word;
+            word-break: break-word;
+        }
+
+        .messages-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .messages-table .role-cell {
+            width: 100px;
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .messages-table .content-cell {
+            width: 25%;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .messages-table .reasoning-cell {
+            width: 25%;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .error {
+            padding: 15px;
+            background: #fee;
+            border: 2px solid #fcc;
+            border-radius: 6px;
+            color: #c33;
+            margin: 20px 0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .search-results {
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+        }
+
+        .search-result-item {
+            padding: 10px 15px;
+            border-bottom: 1px solid #e0e0e0;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .search-result-item:hover {
+            background: #f0f0f0;
+        }
+
+        .search-result-item .row-info-text {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .search-result-item .preview {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state h2 {
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Dataset Viewer</h1>
+            <div class="dataset-info">
+                <span id="dataset-path">{{ dataset_path or 'No dataset loaded' }}</span>
+                <span id="dataset-size"></span>
+            </div>
+            {% if available_datasets|length > 1 %}
+            <div class="dataset-selector">
+                <h3>📁 Available Datasets (click to switch):</h3>
+                <div class="dataset-buttons" id="dataset-buttons">
+                    {% for dataset in available_datasets %}
+                    <button class="dataset-btn {% if dataset == dataset_path %}active{% endif %}"
+                            data-path="{{ dataset }}"
+                            onclick="switchDataset('{{ dataset }}')">
+                        {{ dataset }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="controls">
+            <div>
+                <label for="row-input">Row:</label>
+                <input type="number" id="row-input" min="1" value="1">
+            </div>
+            <button id="prev-btn">← Previous</button>
+            <button id="next-btn">Next →</button>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search in content...">
+            </div>
+            <button id="search-btn">🔍 Search</button>
+        </div>
+
+        <div class="content">
+            <div id="row-info" class="row-info" style="display: none;">
+                <span class="label">Current Row: <span id="current-row">0</span> / <span id="total-rows">0</span></span>
+                <span class="label">Messages: <span id="num-messages">0</span></span>
+            </div>
+
+            <div id="search-results" style="display: none;"></div>
+
+            <div id="loading" class="loading" style="display: none;">
+                Loading...
+            </div>
+
+            <div id="error" class="error" style="display: none;"></div>
+
+            <div id="empty-state" class="empty-state">
+                <h2>Loading dataset...</h2>
+                <p>Please wait while row 1 is being loaded</p>
+            </div>
+
+            <table id="messages-table" class="messages-table" style="display: none;">
+                <thead>
+                    <tr id="table-header">
+                        <th>Role</th>
+                        <th>Content</th>
+                        <th>Reasoning Content</th>
+                    </tr>
+                </thead>
+                <tbody id="messages-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let currentRow = 0;
+        let totalRows = 0;
+
+        // Switch to a different dataset
+        async function switchDataset(datasetPath) {
+            // Show loading state
+            const buttons = document.querySelectorAll('.dataset-btn');
+            buttons.forEach(btn => {
+                if (btn.dataset.path === datasetPath) {
+                    btn.classList.add('loading');
+                    btn.disabled = true;
+                }
+            });
+
+            showLoading();
+            hideError();
+
+            try {
+                const response = await fetch('/api/load_dataset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        path: datasetPath,
+                        split: 'train'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    showError('Failed to load dataset: ' + data.error);
+                    hideLoading();
+                    return;
+                }
+
+                // Update UI
+                document.getElementById('dataset-path').textContent = data.path;
+                document.getElementById('dataset-size').textContent = ` (${data.num_rows} rows)`;
+                totalRows = data.num_rows;
+
+                // Update active button
+                buttons.forEach(btn => {
+                    btn.classList.remove('active', 'loading');
+                    btn.disabled = false;
+                    if (btn.dataset.path === datasetPath) {
+                        btn.classList.add('active');
+                    }
+                });
+
+                // Reset view and load row 1 automatically (index 0)
+                currentRow = 0;
+                document.getElementById('row-input').value = 1;
+                document.getElementById('row-input').max = totalRows;
+
+                hideLoading();
+
+                console.log(`✓ Switched to dataset: ${datasetPath}`);
+
+                // Automatically load row 1 (index 0)
+                loadRow(0);
+            } catch (error) {
+                showError('Error switching dataset: ' + error.message);
+                hideLoading();
+
+                // Remove loading state
+                buttons.forEach(btn => {
+                    btn.classList.remove('loading');
+                    btn.disabled = false;
+                });
+            }
+        }
+
+        // Load dataset info
+        async function loadDatasetInfo() {
+            try {
+                const response = await fetch('/api/dataset_info');
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                totalRows = data.num_rows;
+                document.getElementById('total-rows').textContent = totalRows;
+                document.getElementById('dataset-size').textContent = ` (${totalRows} rows)`;
+            } catch (error) {
+                showError('Failed to load dataset info: ' + error.message);
+            }
+        }
+
+        // Load a specific row
+        async function loadRow(rowIdx) {
+            hideError();
+            hideSearchResults();
+            showLoading();
+
+            try {
+                const response = await fetch(`/api/row/${rowIdx}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    hideLoading();
+                    return;
+                }
+
+                currentRow = data.row_idx;
+                totalRows = data.total_rows;
+
+                displayMessages(data.messages);
+                updateRowInfo(currentRow, totalRows, data.messages.length);
+                updateControls();
+
+                hideLoading();
+                document.getElementById('empty-state').style.display = 'none';
+            } catch (error) {
+                showError('Failed to load row: ' + error.message);
+                hideLoading();
+            }
+        }
+
+        // Display messages in the table
+        function displayMessages(messages) {
+            const tbody = document.getElementById('messages-body');
+            const thead = document.getElementById('table-header');
+            tbody.innerHTML = '';
+
+            // Check if original content fields exist
+            const hasOriginal = messages.length > 0 &&
+                (messages[0].hasOwnProperty('original_content') ||
+                 messages[0].hasOwnProperty('original_reasoning_content'));
+
+            // Update table headers dynamically
+            if (hasOriginal) {
+                thead.innerHTML = `
+                    <th>Role</th>
+                    <th>Original Content</th>
+                    <th>Content</th>
+                    <th>Original Reasoning</th>
+                    <th>Reasoning</th>
+                `;
+            } else {
+                thead.innerHTML = `
+                    <th>Role</th>
+                    <th>Content</th>
+                    <th>Reasoning Content</th>
+                `;
+            }
+
+            messages.forEach((msg, idx) => {
+                const row = tbody.insertRow();
+
+                const roleCell = row.insertCell();
+                roleCell.className = 'role-cell';
+                roleCell.textContent = msg.role;
+
+                if (hasOriginal) {
+                    // Original content column
+                    const originalContentCell = row.insertCell();
+                    originalContentCell.className = 'content-cell';
+                    originalContentCell.textContent = msg.original_content || '';
+
+                    // Translated content column
+                    const contentCell = row.insertCell();
+                    contentCell.className = 'content-cell';
+                    contentCell.textContent = msg.content;
+
+                    // Original reasoning column
+                    const originalReasoningCell = row.insertCell();
+                    originalReasoningCell.className = 'reasoning-cell';
+                    originalReasoningCell.textContent = msg.original_reasoning_content || '';
+
+                    // Translated reasoning column
+                    const reasoningCell = row.insertCell();
+                    reasoningCell.className = 'reasoning-cell';
+                    reasoningCell.textContent = msg.reasoning_content;
+                } else {
+                    // Normal mode: just show translated content
+                    const contentCell = row.insertCell();
+                    contentCell.className = 'content-cell';
+                    contentCell.textContent = msg.content;
+
+                    const reasoningCell = row.insertCell();
+                    reasoningCell.className = 'reasoning-cell';
+                    reasoningCell.textContent = msg.reasoning_content;
+                }
+            });
+
+            document.getElementById('messages-table').style.display = 'table';
+        }
+
+        // Update row info display (convert 0-based to 1-based)
+        function updateRowInfo(current, total, numMessages) {
+            document.getElementById('current-row').textContent = current + 1;
+            document.getElementById('total-rows').textContent = total;
+            document.getElementById('num-messages').textContent = numMessages;
+            document.getElementById('row-info').style.display = 'flex';
+        }
+
+        // Update control buttons state (convert 0-based to 1-based for display)
+        function updateControls() {
+            document.getElementById('prev-btn').disabled = currentRow <= 0;
+            document.getElementById('next-btn').disabled = currentRow >= totalRows - 1;
+            document.getElementById('row-input').value = currentRow + 1;
+            document.getElementById('row-input').max = totalRows;
+        }
+
+        // Show/hide loading state
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        // Show/hide error message
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('error').style.display = 'none';
+        }
+
+        // Show/hide search results
+        function hideSearchResults() {
+            document.getElementById('search-results').style.display = 'none';
+        }
+
+        // Search functionality
+        async function performSearch() {
+            const query = document.getElementById('search-input').value;
+            if (!query) {
+                hideSearchResults();
+                return;
+            }
+
+            showLoading();
+            hideError();
+
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&field=content`);
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    hideLoading();
+                    return;
+                }
+
+                displaySearchResults(data.results, data.count);
+                hideLoading();
+            } catch (error) {
+                showError('Search failed: ' + error.message);
+                hideLoading();
+            }
+        }
+
+        // Display search results
+        function displaySearchResults(results, count) {
+            const resultsDiv = document.getElementById('search-results');
+
+            if (results.length === 0) {
+                resultsDiv.innerHTML = '<div style="padding: 20px; text-align: center;">No results found</div>';
+            } else {
+                let html = `<div style="padding: 10px; background: #f0f0f0; font-weight: 600;">Found ${count} result${count > 1 ? 's' : ''}</div>`;
+                results.forEach(result => {
+                    html += `
+                        <div class="search-result-item" onclick="loadRow(${result.row_idx})">
+                            <div class="row-info-text">Row ${result.row_idx + 1}, Message ${result.msg_idx + 1} (${result.role})</div>
+                            <div class="preview">${escapeHtml(result.preview)}</div>
+                        </div>
+                    `;
+                });
+                resultsDiv.innerHTML = html;
+            }
+
+            resultsDiv.style.display = 'block';
+        }
+
+        // Escape HTML for display
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Event listeners
+        document.getElementById('prev-btn').addEventListener('click', () => {
+            if (currentRow > 0) {
+                loadRow(currentRow - 1);
+            }
+        });
+
+        document.getElementById('next-btn').addEventListener('click', () => {
+            if (currentRow < totalRows - 1) {
+                loadRow(currentRow + 1);
+            }
+        });
+
+        document.getElementById('search-btn').addEventListener('click', performSearch);
+
+        document.getElementById('search-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        document.getElementById('row-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const rowNum = parseInt(document.getElementById('row-input').value);
+                // Convert 1-based input to 0-based index
+                loadRow(rowNum - 1);
+            }
+        });
+
+        // Load dataset info on page load
+        async function initializePage() {
+            await loadDatasetInfo();
+            // Automatically load row 1 (index 0) if dataset is loaded
+            if (totalRows > 0) {
+                loadRow(0);
+            }
+        }
+
+        initializePage();
+    </script>
+</body>
+</html>

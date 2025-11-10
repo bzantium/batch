@@ -1,11 +1,11 @@
 """
-공통 번역 파이프라인 유틸리티 (Batch-only)
+Common translation pipeline utilities (Batch-only)
 
-- 상태 관리 (load/save)
-- 배치 API 래퍼 (upload, create, monitor, download, parse)
-- 배치 파일 병렬 생성 (split_and_save_batch_files)
-- 데이터셋 저장 로직 (apply_translations, save_translated_dataset)
-- 공통 파이프라인 실행기 (run_batch_pipeline, handle_retry_failures, main_runner)
+- State management (load/save)
+- Batch API wrappers (upload, create, monitor, download, parse)
+- Parallel batch file creation (split_and_save_batch_files)
+- Dataset saving logic (apply_translations, save_translated_dataset)
+- Batch pipeline runners (run_batch_pipeline, handle_retry_failures)
 """
 
 import json
@@ -19,24 +19,12 @@ import math
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 from functools import partial
-from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI, AsyncOpenAI
 from datasets import load_dataset, Dataset
 from tqdm import tqdm
 from datetime import datetime
 from tqdm.contrib.concurrent import process_map, thread_map
-
-# ==============================================================================
-# Configuration (Common)
-# ==============================================================================
-MODEL = "gpt-5-mini"
-MAX_COMPLETION_TOKENS = 128000
-REASONING_EFFORT = "medium"  # Options: "minimal", "low", "medium", "high"
-MAX_REQUESTS_PER_BATCH = 5000
-CHECK_INTERVAL = 60
-DEBUG_COUNT = 20
-CHUNK_MAX_LENGTH = 4000  # Default chunk size for content splitting
 
 # ==============================================================================
 # STATE HELPER FUNCTIONS
@@ -66,7 +54,7 @@ def save_state(state_file: str, data: Dict[str, Any]) -> None:
 # COMMON HELPER FUNCTIONS
 # ==============================================================================
 
-def chunk_content(text: str, max_length: int = CHUNK_MAX_LENGTH) -> List[str]:
+def chunk_content(text: str, max_length: int) -> List[str]:
     """
     Chunk content if it exceeds max_length.
     - Splits by double newlines ("\n\n")
@@ -154,12 +142,12 @@ def parse_failure_log(log_file: str) -> List[str]:
 
 def apply_translations(dataset: Dataset, translations: Dict[str, str], is_debug: bool = False) -> Dataset:
     """
-    번역된 내용을 원본 데이터셋에 적용합니다.
+    Applies translated content to the original dataset.
 
     Args:
-        dataset: 원본 데이터셋
-        translations: custom_id -> 번역된 텍스트 매핑
-        is_debug: True인 경우 original_content 및 original_reasoning_content를 보존합니다.
+        dataset: The original dataset.
+        translations: A mapping from custom_id to translated text.
+        is_debug: If True, preserves original content in 'original_content' fields.
     """
     print("\nApplying translations to dataset...")
     if is_debug:
@@ -186,21 +174,19 @@ def apply_translations(dataset: Dataset, translations: Dict[str, str], is_debug:
             # Helper function to merge chunked translations
             def get_merged_translation(base_custom_id: str) -> Optional[str]:
                 """
-                Chunking된 번역 결과를 찾아서 병합합니다.
+                Finds and merges chunked translations.
 
-                처리 로직:
-                1. 먼저 non-chunked 번역 확인 (예: record_0_msg_0_content)
-                   - 있으면 바로 반환 (chunking 안된 메시지)
-                2. 없으면 chunking된 번역들을 순서대로 찾기
-                   - record_0_msg_0_content_chunk_0, chunk_1, ... 형식
-                   - 모든 chunk를 \n\n로 병합하여 반환
-                3. 둘 다 없으면 None 반환
+                Logic:
+                1. Check for a non-chunked translation (e.g., record_0_msg_0_content)
+                2. If not found, search for chunked translations
+                   (e.g., record_0_msg_0_content_chunk_0, chunk_1, ...)
+                3. Merge chunks with "\n\n"
                 """
-                # 1. 먼저 non-chunked 번역 확인 (chunking 안된 메시지)
+                # 1. Check for non-chunked translation
                 if base_custom_id in translations:
                     return translations[base_custom_id]
 
-                # 2. Chunking된 번역 찾기 (chunking된 메시지)
+                # 2. Check for chunked translations
                 chunk_translations = []
                 chunk_idx = 0
                 while True:
@@ -212,35 +198,33 @@ def apply_translations(dataset: Dataset, translations: Dict[str, str], is_debug:
                         break
 
                 if chunk_translations:
-                    # 모든 chunk를 \n\n로 병합 (원본 chunking 시 사용한 구분자와 동일)
+                    # Merge using the same separator used for chunking
                     return "\n\n".join(chunk_translations)
 
-                # 3. 번역 결과가 없는 경우
+                # 3. No translation found
                 return None
 
-            # Debug 모드: 원본 내용 보존
+            # Apply 'content' translation
             merged_content = get_merged_translation(custom_id_content)
-            if is_debug and merged_content is not None:
-                original_content = message.get("content", "")
-                if original_content:
-                    translated_message["original_content"] = original_content
-
             if merged_content is not None:
+                if is_debug:
+                    original_content = message.get("content", "")
+                    if original_content:
+                        translated_message["original_content"] = original_content
                 translated_message["content"] = merged_content
 
-            # Debug 모드: 원본 reasoning 내용 보존
+            # Apply 'reasoning_content' translation
             merged_reasoning = get_merged_translation(custom_id_reasoning)
-            if is_debug and merged_reasoning is not None:
-                original_reasoning = message.get("reasoning_content", "")
-                if original_reasoning:
-                    translated_message["original_reasoning_content"] = original_reasoning
-
             if merged_reasoning is not None:
+                if is_debug:
+                    original_reasoning = message.get("reasoning_content", "")
+                    if original_reasoning:
+                        translated_message["original_reasoning_content"] = original_reasoning
                 translated_message["reasoning_content"] = merged_reasoning
 
             translated_messages.append(translated_message)
 
-        # messages 리스트를 다시 JSON 문자열로 저장
+        # Save the list of messages back as a JSON string
         translated_record["messages"] = json.dumps(translated_messages, ensure_ascii=False)
         translated_data.append(translated_record)
 
@@ -251,7 +235,7 @@ def apply_translations(dataset: Dataset, translations: Dict[str, str], is_debug:
 
 def _extract_shard(idx: int, num_shards: int, dataset: Dataset, out_dirpath: str):
     """
-    (Helper) 데이터셋의 단일 샤드를 Parquet 파일로 저장합니다.
+    (Helper) Saves a single shard of the dataset to a Parquet file.
     """
     try:
         os.makedirs(out_dirpath, exist_ok=True)
@@ -264,12 +248,13 @@ def _extract_shard(idx: int, num_shards: int, dataset: Dataset, out_dirpath: str
 
 def save_translated_dataset(dataset: Dataset, output_dirpath: Path, original_dataset_path: str) -> None:
     """
-    번역된 데이터셋을 원본 샤드 갯수와 동일하게 .zst.parquet 파일로 샤딩하여 저장합니다.
+    Saves the translated dataset into sharded .zst.parquet files,
+    matching the shard count of the original dataset.
     """
     os.makedirs(output_dirpath, exist_ok=True)
     print(f"\nSaving translated dataset (as Parquet shards) to {output_dirpath}...")
 
-    # 원본 DATASET_PATH에서 Parquet 샤드 갯수 계산
+    # Count the number of shards in the original dataset path
     try:
         shard_files = glob.glob(f"{original_dataset_path}/*.parquet")
         num_shards = len(shard_files)
@@ -281,11 +266,11 @@ def save_translated_dataset(dataset: Dataset, output_dirpath: Path, original_dat
         print(f"  ✗ Error counting source shards: {e}. Defaulting to 1 shard.")
         num_shards = 1
 
-    # 병렬 처리 설정 (CPU 바운드 작업인 Parquet 저장을 위해 process_map 사용)
-    num_proc = max(os.cpu_count() // 4, 1)  # 최소 1개 워커 보장
+    # Use process_map for parallel, CPU-bound Parquet saving
+    num_proc = max(os.cpu_count() // 4, 1)  # Use 1/4 of CPUs, min 1
     print(f"  Using {num_proc} workers for parallel saving.")
 
-    # partial 함수 생성
+    # Create a partial function for process_map
     extract_shard_partial = partial(
         _extract_shard,
         num_shards=num_shards,
@@ -293,7 +278,7 @@ def save_translated_dataset(dataset: Dataset, output_dirpath: Path, original_dat
         out_dirpath=str(output_dirpath),
     )
 
-    # 병렬 처리 실행
+    # Run parallel saving
     try:
         process_map(
             extract_shard_partial,
@@ -323,12 +308,12 @@ def _save_batch_file_parallel(
     total_requests: int,
     input_dir: Path
 ) -> Dict[str, Any]:
-    """(Helper) 단일 배치 .jsonl 파일을 병렬(스레드)로 저장합니다."""
+    """(Helper) Saves a single batch .jsonl file in a parallel thread."""
     start_idx = batch_idx * max_per_batch
     end_idx = min((batch_idx + 1) * max_per_batch, total_requests)
     batch_requests = all_requests[start_idx:end_idx]
 
-    # 파일명 패딩 (e.g., batch_00001.jsonl)
+    # Pad filename, e.g., batch_00001.jsonl
     batch_file = input_dir / f"batch_{batch_idx:05d}.jsonl"
 
     try:
@@ -346,7 +331,7 @@ def _save_batch_file_parallel(
         return metadata
     except Exception as e:
         print(f"  ✗ Error saving batch file {batch_idx}: {e}")
-        return {} # 실패 시 빈 dict 반환
+        return {} # Return empty dict on failure
 
 
 def split_and_save_batch_files(
@@ -356,8 +341,8 @@ def split_and_save_batch_files(
 ) -> List[Dict[str, Any]]:
     """
     (Common Function)
-    전체 배치 요청 리스트를 받아 병렬(multi-threaded)로
-    여러 .jsonl 파일에 분할 저장합니다.
+    Takes a list of all batch requests and saves them into
+    multiple .jsonl files in parallel using multi-threading.
     """
     batch_input_dir.mkdir(parents=True, exist_ok=True)
 
@@ -371,7 +356,7 @@ def split_and_save_batch_files(
     print(f"\n✓ Total translation requests: {total_requests}")
     print(f"  Splitting into {num_batches} batch file(s) (using parallel I/O)...")
 
-    # I/O 작업이므로 스레드 워커 수를 넉넉하게 설정
+    # Use a thread pool for I/O-bound tasks
     num_workers = max(min(os.cpu_count() * 4, 32), 4)
 
     save_partial = partial(
@@ -384,19 +369,19 @@ def split_and_save_batch_files(
 
     batch_files_metadata = []
 
-    # thread_map을 사용하여 병렬 I/O 실행
+    # Run parallel I/O
     results = thread_map(
         save_partial,
         range(num_batches),
         max_workers=num_workers,
-        chunksize=1, # 각 스레드가 파일 하나씩 처리
+        chunksize=1, # Each thread handles one file
         desc="Saving batch files"
     )
 
-    # 실패한 경우(빈 dict)를 필터링
+    # Filter out any failed saves (empty dicts)
     batch_files_metadata = [res for res in results if res]
 
-    # 결과가 순서대로 반환되지만, 만약을 위해 batch_idx 기준으로 정렬
+    # Sort by batch_idx to ensure order, though thread_map should preserve it
     batch_files_metadata.sort(key=lambda m: m["batch_idx"])
 
     print(f"\n✓ Created {len(batch_files_metadata)} batch files in {batch_input_dir}")
@@ -406,7 +391,7 @@ def split_and_save_batch_files(
     return batch_files_metadata
 
 def upload_batch_file(client: OpenAI, file_path: str, verbose: bool = True) -> str:
-    """배치 파일을 업로드합니다."""
+    """Uploads a batch file to OpenAI."""
     if verbose:
         print(f"\nUploading {file_path} to OpenAI...")
     with open(file_path, "rb") as f:
@@ -417,10 +402,10 @@ def upload_batch_file(client: OpenAI, file_path: str, verbose: bool = True) -> s
     return file_id
 
 async def upload_batch_file_async(client: AsyncOpenAI, file_path: str, batch_idx: int) -> tuple[int, str]:
-    """배치 파일을 비동기(Executor 사용)로 업로드합니다."""
+    """Uploads a batch file asynchronously using a thread pool executor."""
     loop = asyncio.get_event_loop()
     def _upload():
-        # AsyncOpenAI 객체에서 직접 API 키를 가져와 동기 클라이언트 생성
+        # Create a sync client within the thread for thread-safety
         sync_client = OpenAI(api_key=client.api_key)
         with open(file_path, "rb") as f:
             batch_input_file = sync_client.files.create(file=f, purpose="batch")
@@ -430,7 +415,7 @@ async def upload_batch_file_async(client: AsyncOpenAI, file_path: str, batch_idx
     return batch_idx, file_id
 
 def create_batch_job(client: OpenAI, file_id: str, verbose: bool = True) -> str:
-    """배치 작업을 생성합니다."""
+    """Creates a batch job from an uploaded file ID."""
     if verbose:
         print("\nCreating batch job...")
     batch = client.batches.create(
@@ -445,10 +430,10 @@ def create_batch_job(client: OpenAI, file_id: str, verbose: bool = True) -> str:
         print(f"  Status: {batch.status}")
     return batch_id
 
-def monitor_batch_job(client: OpenAI, batch_id: str, check_interval: int = 60) -> Dict[str, Any]:
-    """배치 작업 완료를 모니터링합니다."""
+def monitor_batch_job(client: OpenAI, batch_id: str, check_interval: int) -> Dict[str, Any]:
+    """Monitors a batch job until completion."""
     print(f"\nMonitoring batch job {batch_id}...")
-    print(f"{check_interval}초마다 상태를 확인합니다...\n")
+    print(f"Checking status every {check_interval} seconds...\n")
     start_time = time.time()
     while True:
         try:
@@ -490,7 +475,7 @@ def monitor_batch_job(client: OpenAI, batch_id: str, check_interval: int = 60) -
         time.sleep(check_interval)
 
 def download_batch_results(client: OpenAI, output_file_id: str, output_path: str, verbose: bool = True) -> None:
-    """배치 결과 파일을 다운로드합니다."""
+    """Downloads batch results from an output file ID."""
     if verbose:
         print(f"\nDownloading batch results...")
     file_response = client.files.content(output_file_id)
@@ -500,7 +485,7 @@ def download_batch_results(client: OpenAI, output_file_id: str, output_path: str
         print(f"✓ Results saved to {output_path}")
 
 async def download_batch_results_async(client: AsyncOpenAI, output_file_id: str, output_path: str, batch_idx: int) -> int:
-    """배치 결과 파일을 비동기(Executor 사용)로 다운로드합니다."""
+    """Downloads batch results asynchronously using a thread pool executor."""
     loop = asyncio.get_event_loop()
     def _download():
         sync_client = OpenAI(api_key=client.api_key)
@@ -512,7 +497,7 @@ async def download_batch_results_async(client: AsyncOpenAI, output_file_id: str,
     return batch_idx
 
 def parse_batch_results(batch_output_file: str) -> (Dict[str, str], List[Dict[str, Any]]):
-    """배치 결과 JSONL 파일을 파싱하여 성공/실패를 분리합니다."""
+    """Parses a batch output JSONL file, separating successes and failures."""
     print(f"\nParsing batch results from {batch_output_file}...")
     translations = {}
     failures = []
@@ -566,26 +551,20 @@ async def run_batch_pipeline(
     state_file_path: str,
     original_dataset_path: str,
     prepare_batch_input_fn: Callable,
+    model: str,
+    reasoning_effort: str,
+    max_completion_tokens: int,
+    max_requests_per_batch: int,
+    check_interval: int,
+    chunk_max_length: int,
     is_debug: bool = False,
-    chunk_max_length: int = CHUNK_MAX_LENGTH,
 ):
     """
     Execute the full Batch API pipeline with multiple batch files and state resume.
-
-    Args:
-        dataset: The input dataset to translate.
-        output_dir: The directory to save all outputs (state, inputs, outputs).
-        state_file_path: Path to the .state file for resuming.
-        original_dataset_path: Path to the original dataset (for shard matching).
-        prepare_batch_input_fn: Dataset-specific function that takes (dataset,
-                                model, reasoning_effort, chunk_max_length) and
-                                returns List[Dict] of batch requests.
-        is_debug: Whether to run in debug mode.
-        chunk_max_length: Maximum length for content chunking.
     """
     print("\n" + "="*80)
     print(f"Running Batch API Translation to Korean")
-    print(f"Model: {MODEL}, Reasoning effort: {REASONING_EFFORT}")
+    print(f"Model: {model}, Reasoning effort: {reasoning_effort}")
     print("="*80)
 
     state = load_state(state_file_path)
@@ -613,19 +592,19 @@ async def run_batch_pipeline(
         if not batch_files_metadata:
             print("\n--- Step 1: Preparing and saving batch input files ---")
 
-            # 1a. (Specific) 데이터셋별 배치 요청 생성 (CPU-bound)
+            # 1a. (Specific) Generate dataset-specific batch requests (CPU-bound)
             all_batch_requests = prepare_batch_input_fn(
                 dataset=dataset,
-                model=MODEL,
-                reasoning_effort=REASONING_EFFORT,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 chunk_max_length=chunk_max_length
             )
 
-            # 1b. (Common) 배치 파일 분할 및 병렬 저장 (I/O-bound)
+            # 1b. (Common) Split and save batch files in parallel (I/O-bound)
             batch_files_metadata = split_and_save_batch_files(
                 all_batch_requests=all_batch_requests,
                 batch_input_dir=batch_input_dir,
-                max_requests_per_batch=MAX_REQUESTS_PER_BATCH
+                max_requests_per_batch=max_requests_per_batch
             )
 
             state["batch_files_metadata"] = batch_files_metadata
@@ -707,7 +686,6 @@ async def run_batch_pipeline(
             batch_idx = batch_meta["batch_idx"]
             batch_key = f"batch_{batch_idx}"
             batch_state = batches_state.get(batch_key, {})
-            # 파일명 형식 수정 (e.g., batch_00001_output.jsonl)
             batch_output_file = batch_output_dir / f"batch_{batch_idx:05d}_output.jsonl"
 
             if batch_output_file.exists() or batch_state.get("status") == "downloaded":
@@ -724,7 +702,7 @@ async def run_batch_pipeline(
 
         if pending_batches:
             print(f"Monitoring {len(pending_batches)} batch job(s)...")
-            print(f"Checking every {CHECK_INTERVAL} seconds...\n")
+            print(f"Checking every {check_interval} seconds...\n")
 
             start_time = time.time()
             download_tasks = {} # {batch_idx: asyncio.Task}
@@ -803,7 +781,7 @@ async def run_batch_pipeline(
                     monitoring_count = len(pending_batches)
                     downloading_count = len(download_tasks)
                     print(f"[{time.strftime('%H:%M:%S')}] Status: {completed_count}/{total_batches} done | {monitoring_count} monitoring | {downloading_count} downloading | Elapsed: {elapsed/60:.1f}m")
-                    await asyncio.sleep(CHECK_INTERVAL)
+                    await asyncio.sleep(check_interval)
 
             print(f"\n✓ All batch jobs completed and downloaded!")
         else:
@@ -838,7 +816,7 @@ async def run_batch_pipeline(
 
         print(f"\n✓ Aggregated {len(all_translations)} successful translations from all batches")
 
-        # 재시도 로직을 위해 집계된 번역 결과 저장
+        # Save aggregated translations for potential retry
         all_translations_file = output_dir / "all_translations.json"
         print(f"  Saving aggregated translations to {all_translations_file}...")
         try:
@@ -907,6 +885,7 @@ async def _run_single_batch_job(
     client: OpenAI,
     batch_requests: List[Dict[str, Any]],
     output_dir: Path,
+    check_interval: int,
 ) -> (Dict[str, str], List[Dict[str, Any]]):
     """
     (Helper) Runs a single batch file job. Used by retry logic.
@@ -935,7 +914,7 @@ async def _run_single_batch_job(
     batch_id = create_batch_job(client, file_id)
 
     print("\nMonitoring retry batch job...")
-    result = monitor_batch_job(client, batch_id, CHECK_INTERVAL)
+    result = monitor_batch_job(client, batch_id, check_interval)
 
     if result["status"] != "completed":
         print(f"\n✗ Retry batch job failed with status: {result['status']}")
@@ -969,36 +948,24 @@ async def _run_single_batch_job(
     return retry_translations, retry_failures
 
 # ==============================================================================
-# MAIN EXECUTION (GENERIC)
+# MAIN EXECUTION (RETRY)
 # ==============================================================================
 
 async def handle_retry_failures(
-    args: argparse.Namespace,
+    output_dir: Path,
     original_dataset_path: str,
     extract_failed_records_fn: Callable,
-    prepare_retry_requests_fn: Callable
+    prepare_retry_requests_fn: Callable,
+    model: str,
+    reasoning_effort: str,
+    max_completion_tokens: int,
+    check_interval: int,
+    chunk_max_length: int
 ):
     """
-    (Generic) --retry-failures 플래그를 처리합니다.
-
-    Args:
-        args: Parsed command-line arguments (must include --retry-failures path).
-        original_dataset_path: Path to the original dataset.
-        extract_failed_records_fn: Dataset-specific function to get failed record data.
-        prepare_retry_requests_fn: Dataset-specific function to build retry requests.
+    (Generic) Handles the '--retry-failures' flag logic.
     """
-    output_dir = Path(args.retry_failures)
-
-    if not output_dir.is_dir():
-        print(f"\n✗ Error: Output folder not found: {args.retry_failures}")
-        sys.exit(1)
-
-    print("=" * 80)
-    print(f"Retry Failed Translations Mode (Batch API Only)")
-    print(f"Output Folder: {output_dir.resolve()}")
-    print("=" * 80)
-
-    # 1. 필수 파일 확인
+    # 1. Check for required files
     failure_log = output_dir / "translation_failures.log"
     all_translations_file = output_dir / "all_translations.json"
 
@@ -1012,7 +979,7 @@ async def handle_retry_failures(
 
     # Load state to check if debug mode was used
     safe_dataset_name = Path(original_dataset_path).name
-    safe_model_name = MODEL.replace("/", "_").replace(".", "-")
+    safe_model_name = model.replace("/", "_").replace(".", "-")
     base_filename = f"{safe_dataset_name}_{safe_model_name}"
     state_file_path = output_dir / f".{base_filename}.state"
 
@@ -1025,18 +992,14 @@ async def handle_retry_failures(
     else:
         print(f"  ⚠ Warning: State file not found at {state_file_path}")
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("\n✗ Error: OPENAI_API_KEY environment variable not set")
-        sys.exit(1)
-
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    # 2. 원본 데이터셋 로드
+    # 2. Load original dataset
     print("\nLoading original dataset...")
     dataset = load_dataset(original_dataset_path, split="train")
     print(f"✓ Loaded {len(dataset)} records")
 
-    # 3. 기존 번역 및 실패 내역 로드
+    # 3. Load previous translations and failures
     print(f"Loading previous translations from {all_translations_file}...")
     with open(all_translations_file, "r", encoding="utf-8") as f:
         all_translations = json.load(f)
@@ -1048,45 +1011,48 @@ async def handle_retry_failures(
         print("\n✗ No failed translations found in log. Nothing to retry.")
         return
 
-    # 4. (Specific) 재시도 대상 레코드 추출
+    # 4. (Specific) Extract records to retry
     failed_records = extract_failed_records_fn(dataset, failed_ids)
     if not failed_records:
         print("\n✗ Could not extract any valid failed records. Exiting.")
         return
 
-    # 5. (Specific) 재시도 요청 생성
+    # 5. (Specific) Prepare retry requests
     print(f"\nPreparing {len(failed_records)} retry requests...")
+    # This function must also be updated to pass max_completion_tokens
     retry_requests = prepare_retry_requests_fn(
         failed_records=failed_records,
-        model=MODEL,
-        reasoning_effort=REASONING_EFFORT,
-        chunk_max_length=getattr(args, 'chunk_max_length', CHUNK_MAX_LENGTH)
+        model=model,
+        reasoning_effort=reasoning_effort,
+        chunk_max_length=chunk_max_length,
+        max_completion_tokens=max_completion_tokens
     )
     print(f"✓ Created {len(retry_requests)} retry requests")
 
-    # 6. 재시도 파이프라인 실행 (Single Batch Job)
+    # 6. Run the retry pipeline (Single Batch Job)
     retry_translations, _ = await _run_single_batch_job(
         client=client,
         batch_requests=retry_requests,
         output_dir=output_dir,
+        check_interval=check_interval,
     )
 
     if not retry_translations:
         print("\n✗ No successful retry translations. Exiting.")
         return
 
-    # 7. 번역 병합
+    # 7. Merge translations
     print("\nMerging original and retry translations...")
     original_count = len(all_translations)
     all_translations.update(retry_translations)
     merged_count = len(all_translations)
     print(f"  ✓ Original: {original_count}, Retried: {len(retry_translations)}, Total: {merged_count}")
 
-    # 8. 전체 번역본 적용
+    # 8. Apply all translations
     print("\nApplying all merged translations to the dataset...")
     translated_dataset = apply_translations(dataset, all_translations, is_debug=is_debug)
 
-    # 9. 병합된 새 Parquet 샤드 저장
+    # 9. Save new merged Parquet shards
     merged_dir = output_dir / "translated_merged"
     print(f"\nSaving merged dataset to {merged_dir}...")
     save_translated_dataset(translated_dataset, merged_dir, original_dataset_path)
@@ -1102,164 +1068,3 @@ async def handle_retry_failures(
     print("\nYou can now load the merged dataset with:\n")
     print(f"from datasets import load_dataset")
     print(f"dataset = load_dataset('{merged_dir}')")
-
-async def main_runner(
-    dataset_path: str,
-    prepare_batch_input_fn: Callable,
-    extract_failed_records_fn: Callable,
-    prepare_retry_requests_fn: Callable
-):
-    """
-    (Generic) Main entry point.
-    Parses arguments and routes to Batch pipeline.
-    """
-
-    parser = argparse.ArgumentParser(description="OpenAI Batch API Translation Pipeline")
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Run the pipeline with only DEBUG_COUNT records for testing."
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        metavar="FOLDER_PATH",
-        help="Resume a batch job from the state file in this folder."
-    )
-    parser.add_argument(
-        "--retry-failures",
-        type=str,
-        default=None,
-        metavar="FOLDER_PATH",
-        help="Retry failed translations from the specified output folder (uses Batch API)."
-    )
-    parser.add_argument(
-        "--chunk-max-length",
-        type=int,
-        default=CHUNK_MAX_LENGTH,
-        metavar="LENGTH",
-        help=f"Maximum length for content chunking (default: {CHUNK_MAX_LENGTH})."
-    )
-
-    args = parser.parse_args()
-
-    # 재시도 모드
-    if args.retry_failures:
-        await handle_retry_failures(
-            args,
-            dataset_path,
-            extract_failed_records_fn,
-            prepare_retry_requests_fn
-        )
-        return
-
-    # --- 메인 파이프라인 실행 ---
-
-    safe_dataset_name = Path(dataset_path).name
-    safe_model_name = MODEL.replace("/", "_").replace(".", "-")
-    base_filename = f"{safe_dataset_name}_{safe_model_name}"
-
-    is_debug = args.debug
-    output_dir = None
-    state_file_path = None
-
-    if args.resume:
-        output_dir = Path(args.resume)
-        if not output_dir.is_dir():
-            print(f"\n✗ Error: Resume folder not found: {args.resume}")
-            sys.exit(1)
-        print(f"Resuming batch job from folder: {output_dir.resolve()}")
-
-        state_file_path = output_dir / f".{base_filename}.state"
-        state = load_state(str(state_file_path))
-        is_debug_from_state = state.get("is_debug", False)
-
-        if is_debug_from_state:
-            print("  ✓ Resuming in DEBUG mode (loaded from state file).")
-            is_debug = True
-        elif args.debug:
-            print("  ⚠ Warning: Resuming a non-debug run with --debug flag.")
-            is_debug = True
-        else:
-            is_debug = False
-
-    else:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        if is_debug:
-            timestamp = timestamp + "_debug"
-        # 데이터셋 이름별로 하위 폴더 생성
-        output_dir = Path(f"experiments/{safe_dataset_name}/" + timestamp)
-        print(f"Starting new run. Outputs will be saved to: {output_dir.resolve()}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    state_file_path = output_dir / f".{base_filename}.state"
-
-    print("=" * 80)
-    print(f"OpenAI Batch Translation Pipeline to Korean")
-    mode_str = "Batch API"
-    if args.resume:
-        mode_str += " (Resuming)"
-    print(f"Model: {MODEL}")
-    print(f"Mode: {mode_str}")
-    print(f"Debug: {is_debug}")
-    print(f"Output Folder: {output_dir.resolve()}")
-    print(f"Source Dataset: {dataset_path}")
-    print("=" * 80)
-
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("\n✗ Error: OPENAI_API_KEY environment variable not set")
-        print("  Please set it with: export OPENAI_API_KEY='your-api-key'")
-        sys.exit(1)
-
-    print("\nLoading dataset...")
-    dataset = load_dataset(
-        dataset_path,
-        split="train",
-    )
-
-    if is_debug:
-        dataset = dataset.take(DEBUG_COUNT)
-
-    print(f"✓ Loaded {len(dataset)} records")
-
-    await run_batch_pipeline(
-        dataset=dataset,
-        output_dir=output_dir,
-        state_file_path=str(state_file_path),
-        original_dataset_path=dataset_path,
-        prepare_batch_input_fn=prepare_batch_input_fn,
-        is_debug=is_debug,
-        chunk_max_length=args.chunk_max_length
-    )
-
-    print("\n" + "=" * 80)
-    print("Translation pipeline completed successfully!")
-    print(f"Mode: {mode_str}")
-    print(f"\nAll outputs saved in folder: {output_dir.resolve()}")
-
-    state = load_state(str(state_file_path))
-    translated_dir_name = state.get("translated_output_directory", "translated")
-    translated_dataset_dir_path = output_dir / translated_dir_name
-    print(f"  - Translated dataset (directory): {translated_dir_name}/")
-
-    fail_log_file = output_dir / "translation_failures.log"
-    if fail_log_file.exists():
-        print(f"  - Failure log: {fail_log_file.name}")
-
-    all_translations_file = output_dir / "all_translations.json"
-    if all_translations_file.exists():
-        print(f"  - Aggregated translations: {all_translations_file.name}")
-
-    print(f"  - Batch input folder: batch_input/")
-    print(f"  - Batch output folder: batch_output/")
-    print(f"  - State file: {Path(state_file_path).name}")
-
-    if not args.resume:
-        print(f"\n  (To resume this job if it fails, use: --resume {output_dir})")
-
-    print(f"\n  (To retry failures, use: --retry-failures {output_dir})")
-    print("\nYou can now load the translated dataset with:\n")
-    print(f"from datasets import load_dataset")
-    print(f"dataset = load_dataset('{translated_dataset_dir_path}', split='train')")

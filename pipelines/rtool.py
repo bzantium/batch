@@ -1,39 +1,25 @@
 """
-RTool 데이터셋 번역 파이프라인 (translate_rtool.py)
+RTool Dataset Translation Pipeline (Specific Logic)
 
-- 'utils.py'의 공통 파이프라인 실행기를 사용합니다.
-- RTool 고유의 로직 (tools_json, 프롬프트 선택)을 정의하여 주입합니다.
+- Defines RTool-specific logic (tools_json, prompt selection)
+- Injected into the main pipeline runner.
 """
 
 import json
-import asyncio
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datasets import Dataset
 from tqdm import tqdm
 
-# 공통 유틸리티 및 설정 임포트
 import utils
 
 # ==============================================================================
-# RTool Specific Configuration
-# ==============================================================================
-# 덮어쓰거나 새로 정의할 RTool 고유의 설정
-# (utils.py의 기본값을 사용하려면 이 섹션을 비워도 됩니다)
-utils.DATASET_PATH = "/data/ib-huawei-nas-lmt_980/datasets/Kanana-2-Post-Training-Dataset/rtool"
-DATASET_PATH = utils.DATASET_PATH # main_runner에 전달하기 위함
-
-# ==============================================================================
-# RTool SPECIFIC FUNCTIONS
+# 1. RTool Specific Prompts
 # ==============================================================================
 
-# 1. RTool용 프롬프트 (tools_json을 인자로 받음)
-# ==============================================================================
-
-def create_translation_prompt(text: str, tools_json: Optional[str] = None) -> str:
+def create_translation_prompt_with_tool_calls(text: str, tools_json: Optional[str] = None) -> str:
     """
-    (엄격) 번역 프롬프트: 사용자 입력, 어시스턴트의 Tool Reasoning용.
-    기술 용어, 함수명, 인자 등을 엄격하게 보존합니다.
+    (Strict) Translation prompt: For user input and assistant's tool reasoning.
+    Strictly preserves technical terms, function names, and arguments.
     """
 
     prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
@@ -43,7 +29,7 @@ Output Rules (Required):
 2.  Do **not** repeat the original English text.
 3.  Do **not** include preambles, explanations, or labels like "Translation:".
 4.  The response must start *immediately* with the first translated word.
-5.  **Korean Tone:** Use a formal, polite tone, ending sentences with '합니다' or '습니다'.
+5.  **Korean Tone:** Use a formal, polite tone like "합니다", "입니다", or "습니다".
 
 Translation Rules (Preserve the following as-is):
 1.  All technical identifiers (e.g., function names, variable names, class names) must remain in English.
@@ -66,22 +52,22 @@ Tool JSON:
 
     prompt += f"""
 
-입력 예시:
+Input Example:
 Here are the results for `ppsr_lookup_by_vin(vin='123')`.
-번역 예시:
+Translation Example:
 `ppsr_lookup_by_vin(vin='123')`에 대한 결과입니다.
 
-이제 아래 입력 텍스트를 한국어로 번역하세요.
+Now, translate the input text below into Korean.
 
-입력 텍스트:
+Input Text:
 {text}
 """
     return prompt
 
-def create_flexible_translation_prompt(text: str) -> str:
+def create_translation_prompt_without_tool_calls(text: str) -> str:
     """
-    (유연) 번역 프롬프트: 어시스턴트의 최종 답변(Tool-call이 없는)용.
-    마크다운, 서식, 특정 개체(URL, 숫자)는 유지하되, 모든 자연어는 유연하게 번역합니다.
+    (Flexible) Translation prompt: For assistant's final answer (no tool-call).
+    Translates natural language flexibly but preserves formatting and entities.
     """
 
     prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
@@ -92,7 +78,7 @@ Output Rules (Required):
 2.  Do **not** repeat the original English text.
 3.  Do **not** include preambles, explanations, or labels like "Translation:".
 4.  The response must start *immediately* with the first translated word.
-5.  **Korean Tone:** Use a formal, polite tone, ending sentences with '합니다' or '습니다'.
+5.  **Korean Tone:** Use a formal, polite tone like "합니다", "입니다", or "습니다".
 
 Translation Rules:
 1.  **Translate All Natural Language:** This is the most important rule. All descriptive text, headers, labels, and descriptions (e.g., "Final Pricing Analysis", "Sale Price", "Eligibility", "Global STEM Education Innovation Challenge", "Platform", "Deadline") **must** be translated into Korean.
@@ -106,11 +92,11 @@ Translation Rules:
 4.  Combine these rules. For example, `**Deadline**: April 30, 2025` should become `**마감일**: April 30, 2025`.
 5.  **Chinese Characters (Translate):** Translate all Chinese characters (Hanja) into Korean or English based on the context and rules above.
 
-입력 예시:
+Input Example:
 1. **Global STEM Education Innovation Challenge**
    - **Platform**: Challenge.gov
    - **Deadline**: April 30, 2025
-번역 예시:
+Translation Example:
 1. **글로벌 STEM 교육 혁신 챌린지**
    - **플랫폼**: Challenge.gov
    - **마감일**: April 30, 2025
@@ -123,21 +109,19 @@ Translation Rules:
     return prompt
 
 # ==============================================================================
-# 2. RTool용 배치 입력 생성 (utils.run_batch_pipeline에 주입될 함수)
+# 2. RTool Batch Input Preparation (Injected Function)
 # ==============================================================================
 
-def prepare_rtool_batch_input(
+def prepare_batch_input(
     dataset: Dataset,
     model: str,
     reasoning_effort: str,
-    chunk_max_length: int = utils.CHUNK_MAX_LENGTH
+    chunk_max_length: int
 ) -> List[Dict[str, Any]]:
     """
-    (RTool Specific) Batch API 입력을 위한 *요청 리스트*를 생성합니다.
-    (파일 분할 및 저장은 utils.py에서 처리)
-
-    - 'metadata'에서 'tools_json'을 추출합니다.
-    - 'role' 및 'tool_calls' 유무에 따라 다른 프롬프트를 사용합니다.
+    (RTool Specific) Creates the list of batch requests.
+    - Extracts 'tools_json' from 'metadata'.
+    - Selects different prompts based on 'role' and 'tool_calls'.
     """
     print(f"Preparing RTool batch requests for {len(dataset)} records...")
     print(f"  Model: {model}, Reasoning effort: {reasoning_effort}")
@@ -147,7 +131,7 @@ def prepare_rtool_batch_input(
 
     for record_idx, record in enumerate(tqdm(dataset, desc="Processing records")):
 
-        # (RTool-specific) record의 metadata(JSON string)에서 tools 추출
+        # (RTool-specific) Extract tools from metadata JSON string
         tools_json_str = None
         metadata_str = record.get("metadata")
         if metadata_str:
@@ -157,7 +141,7 @@ def prepare_rtool_batch_input(
                 if tools_metadata:
                     tools_json_str = json.dumps(tools_metadata, indent=2, ensure_ascii=False)
             except (json.JSONDecodeError, TypeError) as e:
-                if record_idx < 5: # 처음 몇 개만 경고 출력
+                if record_idx < 5: # Show warning only for first few
                     print(f"  ⚠ Warning: Could not parse metadata for record {record_idx}: {e}")
                 pass
 
@@ -172,23 +156,21 @@ def prepare_rtool_batch_input(
             reasoning_content = message.get("reasoning_content")
             tool_calls = message.get("tool_calls") # (RTool-specific)
 
-            # 1. 'content' 번역 요청
+            # 1. 'content' translation request
             if content and content.strip() and role != "tool":
-                # Chunk content if too long
                 content_chunks = utils.chunk_content(content, max_length=chunk_max_length)
-
                 for chunk_idx, chunk in enumerate(content_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_content"
                     if len(content_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    # (RTool-specific) content 번역 시 프롬프트 선택
+                    # (RTool-specific) Prompt selection for content
                     if role == "assistant" and not tool_calls:
-                        # Case 1: Assistant의 최종 답변 (tool_calls 없음) -> 유연한 프롬프트
-                        prompt_content = create_flexible_translation_prompt(chunk)
+                        # Case 1: Assistant's final answer (no tool_calls) -> Flexible prompt
+                        prompt_content = create_translation_prompt_without_tool_calls(chunk)
                     else:
-                        # Case 2: User의 요청 또는 Assistant의 tool_call 중간 답변 -> 엄격한 프롬프트
-                        prompt_content = create_translation_prompt(
+                        # Case 2: User request or Assistant tool_call reasoning -> Strict prompt
+                        prompt_content = create_translation_prompt_with_tool_calls(
                             chunk, tools_json=tools_json_str
                         )
 
@@ -199,25 +181,22 @@ def prepare_rtool_batch_input(
                         "body": {
                             "model": model,
                             "messages": [{"role": "user", "content": prompt_content}],
-                            "max_completion_tokens": utils.MAX_COMPLETION_TOKENS,
                             "reasoning_effort": reasoning_effort
                         }
                     }
                     all_batch_requests.append(batch_request)
                     total_messages += 1
 
-            # 2. 'reasoning_content' 번역 요청
+            # 2. 'reasoning_content' translation request
             if reasoning_content and reasoning_content.strip():
-                # Chunk reasoning_content if too long
                 reasoning_chunks = utils.chunk_content(reasoning_content, max_length=chunk_max_length)
-
                 for chunk_idx, chunk in enumerate(reasoning_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_reasoning"
                     if len(reasoning_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    # reasoning_content는 항상 엄격한 프롬프트 사용
-                    prompt_content = create_translation_prompt(
+                    # reasoning_content always uses the strict prompt
+                    prompt_content = create_translation_prompt_with_tool_calls(
                         chunk, tools_json=tools_json_str
                     )
 
@@ -228,7 +207,6 @@ def prepare_rtool_batch_input(
                         "body": {
                             "model": model,
                             "messages": [{"role": "user", "content": prompt_content}],
-                            "max_completion_tokens": utils.MAX_COMPLETION_TOKENS,
                             "reasoning_effort": reasoning_effort
                         }
                     }
@@ -237,39 +215,32 @@ def prepare_rtool_batch_input(
 
     print(f"\n✓ Total records processed: {len(dataset)}")
     print(f"  Total fields to translate (content + reasoning): {total_messages}")
-
     return all_batch_requests
 
-
 # ==============================================================================
-# 3. RTool용 실패 레코드 추출 (utils.handle_retry_failures에 주입될 함수)
+# 3. RTool Failed Record Extraction (Injected Function)
 # ==============================================================================
 
-def extract_rtool_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+def extract_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     """
-    (RTool Specific) Extract records and messages that correspond to failed custom IDs.
-    - 'metadata'에서 'tools_json_str'을 추출하여 포함합니다.
-    - 재시도 시 프롬프트 선택을 위해 'role', 'tool_calls'를 포함합니다.
+    (RTool Specific) Extracts failed records.
+    - Includes 'tools_json_str' for context.
+    - Includes 'role' and 'tool_calls' for prompt selection during retry.
     """
     print(f"Extracting RTool failed records from dataset...")
     failed_records = {}
 
     for custom_id in failed_ids:
-        # custom_id 파싱: "record_{record_idx}_msg_{msg_idx}_{content_type}"
-        # 또는 chunking된 경우: "record_{record_idx}_msg_{msg_idx}_{content_type}_chunk_{chunk_idx}"
         try:
             parts = custom_id.split("_")
             record_idx = int(parts[1])
             msg_idx = int(parts[3])
             content_type = parts[4] # "content" or "reasoning"
 
-            # chunking 여부 확인 (chunking된 경우 parts[5] == "chunk")
-            is_chunked = len(parts) > 5 and parts[5] == "chunk"
-
             if record_idx < len(dataset):
                 record = dataset[record_idx]
 
-                # (RTool-specific) record의 metadata(JSON string)에서 tools 추출
+                # (RTool-specific) Extract tools from metadata
                 tools_json_str = None
                 metadata_str = record.get("metadata")
                 if metadata_str:
@@ -288,7 +259,6 @@ def extract_rtool_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dic
 
                 if msg_idx < len(messages):
                     message = messages[msg_idx]
-
                     content_to_translate = ""
                     if content_type == "content":
                         content_to_translate = message.get("content", "")
@@ -298,7 +268,7 @@ def extract_rtool_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dic
                         print(f"  ⚠ Warning: Unknown content_type '{content_type}' in custom_id {custom_id}")
                         continue
 
-                    # (RTool-specific) 재시도 로직을 위해 role 및 tool_calls 저장
+                    # (RTool-specific) Store role and tool_calls for retry logic
                     role = message.get("role", "")
                     tool_calls = message.get("tool_calls")
 
@@ -307,8 +277,8 @@ def extract_rtool_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dic
                         "msg_idx": msg_idx,
                         "content": content_to_translate,
                         "role": role,
-                        "tool_calls": tool_calls, # 재시도 시 프롬프트 선택용
-                        "tools_json_str": tools_json_str # 재시도 시 프롬프트 주입용
+                        "tool_calls": tool_calls, # For prompt selection
+                        "tools_json_str": tools_json_str # For prompt injection
                     }
         except (IndexError, ValueError, json.JSONDecodeError) as e:
             print(f"  ⚠ Warning: Could not parse custom_id {custom_id}: {e}")
@@ -317,16 +287,16 @@ def extract_rtool_failed_records(dataset: Dataset, failed_ids: List[str]) -> Dic
     print(f"✓ Extracted {len(failed_records)} records for retry")
     return failed_records
 
-
 # ==============================================================================
-# 4. RTool용 재시도 요청 생성 (utils.handle_retry_failures에 주입될 함수)
+# 4. RTool Retry Request Preparation (Injected Function)
 # ==============================================================================
 
-def prepare_rtool_retry_requests(
+def prepare_retry_requests(
     failed_records: Dict[str, Dict[str, Any]],
     model: str,
     reasoning_effort: str,
-    chunk_max_length: int = utils.CHUNK_MAX_LENGTH
+    chunk_max_length: int,
+    max_completion_tokens: int
 ) -> List[Dict[str, Any]]:
     """
     (RTool Specific) Prepares the list of batch requests for retrying failures.
@@ -343,16 +313,13 @@ def prepare_rtool_retry_requests(
         if not content or not content.strip() or role == "tool":
             continue
 
-        # 원래 custom_id가 chunking된 경우 base custom_id 추출
-        # 예: "record_0_msg_0_content_chunk_0" -> "record_0_msg_0_content"
         base_custom_id = custom_id
         if "_chunk_" in custom_id:
             base_custom_id = custom_id.rsplit("_chunk_", 1)[0]
 
-        # Chunk content if too long
         content_chunks = utils.chunk_content(content, max_length=chunk_max_length)
 
-        # (RTool-specific) 재시도 시 프롬프트 선택
+        # (RTool-specific) Prompt selection logic for retry
         is_reasoning = base_custom_id.endswith("_reasoning")
 
         for chunk_idx, chunk in enumerate(content_chunks):
@@ -361,16 +328,16 @@ def prepare_rtool_retry_requests(
                 chunk_custom_id += f"_chunk_{chunk_idx}"
 
             if is_reasoning:
-                # Case 1: reasoning_content 재시도 -> 항상 엄격한 프롬프트
-                prompt_content = create_translation_prompt(
+                # Case 1: reasoning_content retry -> always strict prompt
+                prompt_content = create_translation_prompt_with_tool_calls(
                     chunk, tools_json=tools_json_str
                 )
             elif role == "assistant" and not tool_calls:
-                # Case 2: Assistant의 최종 답변 (tool_calls 없음) -> 유연한 프롬프트
-                prompt_content = create_flexible_translation_prompt(chunk)
+                # Case 2: Assistant's final answer (no tool_calls) -> Flexible prompt
+                prompt_content = create_translation_prompt_without_tool_calls(chunk)
             else:
-                # Case 3: User의 요청 또는 기타 -> 엄격한 프롬프트
-                prompt_content = create_translation_prompt(
+                # Case 3: User request or other -> Strict prompt
+                prompt_content = create_translation_prompt_with_tool_calls(
                     chunk, tools_json=tools_json_str
                 )
 
@@ -381,23 +348,10 @@ def prepare_rtool_retry_requests(
                 "body": {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt_content}],
-                    "max_completion_tokens": utils.MAX_COMPLETION_TOKENS,
+                    "max_completion_tokens": max_completion_tokens,
                     "reasoning_effort": reasoning_effort
                 }
             }
             batch_requests.append(batch_request)
 
     return batch_requests
-
-# ==============================================================================
-# MAIN EXECUTION
-# ==============================================================================
-
-if __name__ == "__main__":
-    # utils.main_runner에 RTool 고유의 설정과 함수들을 주입합니다.
-    asyncio.run(utils.main_runner(
-        dataset_path=DATASET_PATH,
-        prepare_batch_input_fn=prepare_rtool_batch_input,
-        extract_failed_records_fn=extract_rtool_failed_records,
-        prepare_retry_requests_fn=prepare_rtool_retry_requests
-    ))

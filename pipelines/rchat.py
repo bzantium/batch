@@ -54,7 +54,6 @@ Translation Example 2:
 
 입력 텍스트:
 {text}
----
 """
     return prompt
 

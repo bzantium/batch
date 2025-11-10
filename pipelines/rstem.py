@@ -16,13 +16,14 @@ import utils
 # 1. RStem Specific Prompt
 # ==============================================================================
 
-def create_rstem_translation_prompt(text: str) -> str:
+def create_translation_prompt() -> str:
     """
     (RStem Comprehensive) Translation prompt for 'content' and 'reasoning_content'.
     Strictly preserves all STEM (Science, Technology, Engineering, Math) elements.
+    Returns system_prompt string.
     """
 
-    prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
+    system_prompt = """You are an expert translation engine. Your task is to translate the given text into Korean.
 This text contains **STEM (Science, Technology, Engineering, and Mathematics)** related content.
 
 Output Rules (Required):
@@ -51,13 +52,9 @@ Input Example 2:
 The formula $E=mc^2$ demonstrates mass-energy equivalence. Use the `calculate_energy()` function.
 Translation Example 2:
 $E=mc^2$ 공식은 질량-에너지 등가성을 보여줍니다. `calculate_energy()` 함수를 사용하세요.
-
-이제 아래 입력 텍스트를 한국어로 번역하세요.
-
-입력 텍스트:
-{text}
 """
-    return prompt
+
+    return system_prompt
 
 # ==============================================================================
 # 2. RStem Batch Input Preparation (Injected Function)
@@ -93,19 +90,23 @@ def prepare_batch_input(
             # 1. 'content' translation request
             if content and content.strip():
                 content_chunks = utils.chunk_content(content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(content_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_content"
                     if len(content_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rstem_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
                     batch_request = {
                         "custom_id": custom_id,
                         "method": "POST",
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }
@@ -115,19 +116,23 @@ def prepare_batch_input(
             # 2. 'reasoning_content' translation request
             if reasoning_content and reasoning_content.strip():
                 reasoning_chunks = utils.chunk_content(reasoning_content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(reasoning_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_reasoning"
                     if len(reasoning_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rstem_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
                     batch_request = {
                         "custom_id": custom_id,
                         "method": "POST",
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }

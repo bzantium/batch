@@ -17,13 +17,14 @@ import utils
 # 1. RChat Specific Prompt
 # ==============================================================================
 
-def create_rchat_translation_prompt(text: str) -> str:
+def create_translation_prompt() -> str:
     """
     (RChat Generic) Translation prompt for 'content' and 'reasoning_content'.
     Preserves all technical elements: LaTeX, code, markdown, etc.
+    Returns system_prompt string.
     """
 
-    prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
+    system_prompt = """You are an expert translation engine. Your task is to translate the given text into Korean.
 This text may contain general conversation, as well as **Mathematics (LaTeX)** or **Code (Programming)** related content.
 
 Output Rules (Required):
@@ -49,13 +50,9 @@ Input Example 2:
 Calculate the value of $x^2$ where `x = 5`.
 Translation Example 2:
 `x = 5`일 때 $x^2$의 값을 계산하세요.
-
-이제 아래 입력 텍스트를 한국어로 번역하세요.
-
-입력 텍스트:
-{text}
 """
-    return prompt
+
+    return system_prompt
 
 # ==============================================================================
 # 2. RChat Batch Input Preparation (Injected Function)
@@ -98,7 +95,7 @@ def prepare_batch_input(
                     if len(content_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rchat_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
 
                     batch_request = {
                         "custom_id": custom_id,
@@ -106,7 +103,10 @@ def prepare_batch_input(
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                             # max_completion_tokens is set by the retry helper, not here
                         }
@@ -123,7 +123,7 @@ def prepare_batch_input(
                     if len(reasoning_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rchat_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
 
                     batch_request = {
                         "custom_id": custom_id,
@@ -131,7 +131,10 @@ def prepare_batch_input(
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }

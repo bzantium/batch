@@ -16,13 +16,16 @@ import utils
 # 1. RTool Specific Prompts
 # ==============================================================================
 
-def create_translation_prompt_with_tool_calls(text: str, tools_json: Optional[str] = None) -> str:
+def create_translation_prompt_with_tool_calls(
+    tools_json: Optional[str] = None
+) -> str:
     """
     (Strict) Translation prompt: For user input and assistant's tool reasoning.
     Strictly preserves technical terms, function names, and arguments.
+    Returns system_prompt string.
     """
 
-    prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
+    system_prompt = """You are an expert translation engine. Your task is to translate the given text into Korean.
 
 Output Rules (Required):
 1.  Return **only** the translated Korean text.
@@ -37,40 +40,35 @@ Translation Rules (Preserve the following as-is):
 3.  All technical acronyms and API-related terms (e.g., VIN, PPSR, DMV, API) must remain in English.
 4.  Code snippets, JSON structures, and technical formats must not be altered.
 5.  Units of measurement (e.g., 287m, 0.5m/pixel) must be preserved in their original format.
-6.  All formatting, including line breaks, markdown (e.g., `![Heightmap](...)`), and whitespace, must be preserved.
-"""
+6.  All formatting, including line breaks, markdown (e.g., `![Heightmap](...)`), and whitespace, must be preserved."""
 
     if tools_json:
-        prompt += f"""
+        system_prompt += f"""
+
 Reference: Pay close attention to the `function.name` and `function.parameters` in this JSON.
 ---
 Tool JSON:
 {tools_json}
----
-"""
+---"""
 
-    prompt += f"""
+    system_prompt += """
 
 Input Example:
 Here are the results for `ppsr_lookup_by_vin(vin='123')`.
 Translation Example:
 `ppsr_lookup_by_vin(vin='123')`에 대한 결과입니다.
-
-Now, translate the input text below into Korean.
-
-Input Text:
-{text}
 """
-    return prompt
 
-def create_translation_prompt_without_tool_calls(text: str) -> str:
+    return system_prompt
+
+def create_translation_prompt_without_tool_calls() -> str:
     """
     (Flexible) Translation prompt: For assistant's final answer (no tool-call).
     Translates natural language flexibly but preserves formatting and entities.
+    Returns system_prompt string.
     """
 
-    prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
-This text is a final response to the user, often a summary or a list.
+    system_prompt = """You are an expert translation engine. Your task is to translate the given text into Korean.
 
 Output Rules (Required):
 1.  Return **only** the translated Korean text.
@@ -98,13 +96,9 @@ Translation Example:
 1. **글로벌 STEM 교육 혁신 챌린지**
    - **플랫폼**: Challenge.gov
    - **마감일**: April 30, 2025
-
-이제 아래 입력 텍스트를 한국어로 번역하세요.
-
-입력 텍스트:
-{text}
 """
-    return prompt
+
+    return system_prompt
 
 # ==============================================================================
 # 2. RTool Batch Input Preparation (Injected Function)
@@ -157,6 +151,7 @@ def prepare_batch_input(
             # 1. 'content' translation request
             if content and content.strip() and role != "tool":
                 content_chunks = utils.chunk_content(content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(content_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_content"
                     if len(content_chunks) > 1:
@@ -165,11 +160,11 @@ def prepare_batch_input(
                     # (RTool-specific) Prompt selection for content
                     if role == "assistant" and not tool_calls:
                         # Case 1: Assistant's final answer (no tool_calls) -> Flexible prompt
-                        prompt_content = create_translation_prompt_without_tool_calls(chunk)
+                        system_prompt = create_translation_prompt_without_tool_calls()
                     else:
                         # Case 2: User request or Assistant tool_call reasoning -> Strict prompt
-                        prompt_content = create_translation_prompt_with_tool_calls(
-                            chunk, tools_json=tools_json_str
+                        system_prompt = create_translation_prompt_with_tool_calls(
+                            tools_json=tools_json_str
                         )
 
                     batch_request = {
@@ -178,7 +173,10 @@ def prepare_batch_input(
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }
@@ -188,14 +186,15 @@ def prepare_batch_input(
             # 2. 'reasoning_content' translation request
             if reasoning_content and reasoning_content.strip():
                 reasoning_chunks = utils.chunk_content(reasoning_content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(reasoning_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_reasoning"
                     if len(reasoning_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
                     # reasoning_content always uses the strict prompt
-                    prompt_content = create_translation_prompt_with_tool_calls(
-                        chunk, tools_json=tools_json_str
+                    system_prompt = create_translation_prompt_with_tool_calls(
+                        tools_json=tools_json_str
                     )
 
                     batch_request = {
@@ -204,7 +203,10 @@ def prepare_batch_input(
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }

@@ -16,13 +16,14 @@ import utils
 # 1. RCode Specific Prompt
 # ==============================================================================
 
-def create_rcode_translation_prompt(text: str) -> str:
+def create_translation_prompt() -> str:
     """
     (RCode Strict) Translation prompt for 'content' and 'reasoning_content'.
     Strictly preserves code, variables, function names, and technical terms.
+    Returns system_prompt string.
     """
 
-    prompt = f"""You are an expert translation engine. Your task is to translate the given text into Korean.
+    system_prompt = """You are an expert translation engine. Your task is to translate the given text into Korean.
 This text may contain Code (Programming) related content.
 
 Output Rules (Required):
@@ -48,13 +49,9 @@ Input Example 2:
 The function `get_user(user_id)` retrieves user data from the `/api/v1/users` endpoint.
 Translation Example 2:
 `get_user(user_id)` 함수는 `/api/v1/users` 엔드포인트에서 사용자 데이터를 가져옵니다.
-
-이제 아래 입력 텍스트를 한국어로 번역하세요.
-
-입력 텍스트:
-{text}
 """
-    return prompt
+
+    return system_prompt
 
 # ==============================================================================
 # 2. RCode Batch Input Preparation (Injected Function)
@@ -90,19 +87,23 @@ def prepare_batch_input(
             # 1. 'content' translation request
             if content and content.strip():
                 content_chunks = utils.chunk_content(content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(content_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_content"
                     if len(content_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rcode_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
                     batch_request = {
                         "custom_id": custom_id,
                         "method": "POST",
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }
@@ -112,19 +113,23 @@ def prepare_batch_input(
             # 2. 'reasoning_content' translation request
             if reasoning_content and reasoning_content.strip():
                 reasoning_chunks = utils.chunk_content(reasoning_content, max_length=chunk_max_length)
+
                 for chunk_idx, chunk in enumerate(reasoning_chunks):
                     custom_id = f"record_{record_idx}_msg_{msg_idx}_reasoning"
                     if len(reasoning_chunks) > 1:
                         custom_id += f"_chunk_{chunk_idx}"
 
-                    prompt_content = create_rcode_translation_prompt(chunk)
+                    system_prompt = create_translation_prompt()
                     batch_request = {
                         "custom_id": custom_id,
                         "method": "POST",
                         "url": "/v1/chat/completions",
                         "body": {
                             "model": model,
-                            "messages": [{"role": "user", "content": prompt_content}],
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": chunk}
+                            ],
                             "reasoning_effort": reasoning_effort
                         }
                     }

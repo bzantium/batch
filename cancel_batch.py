@@ -1,11 +1,12 @@
 """
-OpenAI 배치 작업 취소 스크립트 (병렬 처리)
+OpenAI Batch Job Cancellation Script (Parallel)
 
-.state 파일을 인자로 받아, 해당 파일에 기록된 'batches' 내의
-모든 배치 ID를 조회하고, 'validating', 'in_progress' 상태인
-작업을 모두 병렬(multi-threaded)로 취소합니다.
+Accepts a .state file as an argument, reads all batch IDs
+recorded in the 'batches' key, queries their status, and
+cancels any jobs that are in 'validating' or 'in_progress'
+status using parallel (multi-threaded) API calls.
 
-사용법:
+Usage:
 python cancel_batch.py --file /path/to/experiments/your_run/.dataset_model.state
 """
 
@@ -18,13 +19,13 @@ from typing import Dict, Any, List
 from functools import partial
 from tqdm.contrib.concurrent import thread_map
 
-# 취소 가능한 상태 목록 (OpenAI API 기준)
+# List of cancellable statuses (per OpenAI API)
 CANCELLABLE_STATUSES = ["validating", "in_progress"]
 
 def load_state(state_file: str) -> Dict[str, Any]:
     """
-    .state 파일을 로드합니다.
-    (utils.py의 load_state와 유사하나, 이 스크립트의 독립성을 위해 내장)
+    Loads the .state file.
+    (Similar to utils.load_state, but embedded for script independence)
     """
     try:
         with open(state_file, "r") as f:
@@ -46,8 +47,8 @@ def cancel_single_batch(
     client: OpenAI
 ) -> Dict[str, str]:
     """
-    (Helper) 단일 배치 작업을 조회하고 필요한 경우 취소합니다.
-    thread_map에서 사용할 함수입니다.
+    (Helper) Checks the status of a single batch job and cancels if necessary.
+    This function is designed for use with thread_map.
     """
     batch_key = batch_info.get("batch_key", "unknown_key")
     batch_id = batch_info.get("batch_id")
@@ -56,11 +57,11 @@ def cancel_single_batch(
         return {"status": "skipped_no_id", "key": batch_key, "id": None, "reason": "No 'batch_id'"}
 
     try:
-        # 1. 최신 상태 조회
+        # 1. Retrieve the latest status
         batch = client.batches.retrieve(batch_id)
         current_status = batch.status
 
-        # 2. 상태 확인 및 취소
+        # 2. Check status and cancel if appropriate
         if current_status in CANCELLABLE_STATUSES:
             cancelled_batch = client.batches.cancel(batch_id)
             return {
@@ -70,7 +71,7 @@ def cancel_single_batch(
                 "reason": f"Cancelled (was {current_status}, now {cancelled_batch.status})"
             }
         else:
-            # 'finalizing', 'completed', 'failed', 'expired', 'cancelling', 'cancelled'
+            # Status is 'finalizing', 'completed', 'failed', 'expired', 'cancelling', 'cancelled'
             return {
                 "status": "skipped_done",
                 "key": batch_key,
@@ -79,7 +80,7 @@ def cancel_single_batch(
             }
 
     except Exception as e:
-        # e.g., "NotFound" 에러 (이미 삭제되었거나 ID가 잘못된 경우)
+        # e.g., "NotFound" error (if job was deleted or ID is invalid)
         return {
             "status": "error",
             "key": batch_key,
@@ -106,7 +107,7 @@ def main():
 
     args = parser.parse_args()
 
-    # 1. API 키 확인
+    # 1. Check for API key
     if not os.environ.get("OPENAI_API_KEY"):
         print("\n✗ Error: OPENAI_API_KEY environment variable not set")
         print("  Please set it with: export OPENAI_API_KEY='your-api-key'")
@@ -118,7 +119,7 @@ def main():
         print(f"✗ Error initializing OpenAI client: {e}")
         sys.exit(1)
 
-    # 2. 상태 파일 로드
+    # 2. Load state file
     print("=" * 80)
     print("OpenAI Batch Job Canceller (Parallel)")
     print("=" * 80)
@@ -131,14 +132,14 @@ def main():
 
     print(f"Found {len(batches_state)} batch entries in state file.")
 
-    # 3. 처리할 작업 목록 생성
+    # 3. Create list of jobs to process
     batches_to_process = []
     for batch_key, batch_info in batches_state.items():
-        # 스레드 헬퍼 함수가 키를 알 수 있도록 'batch_key' 추가
+        # Add 'batch_key' so the thread helper knows the key
         batch_info['batch_key'] = batch_key
         batches_to_process.append(batch_info)
 
-    # batch_id가 없는 작업은 미리 필터링
+    # Pre-filter jobs that don't have a batch_id
     valid_jobs = [info for info in batches_to_process if info.get("batch_id")]
     skipped_no_id_count = len(batches_to_process) - len(valid_jobs)
 
@@ -150,14 +151,14 @@ def main():
 
     print(f"Querying and attempting to cancel {len(valid_jobs)} jobs in parallel (using {args.workers} workers)...")
 
-    # 4. partial 함수 생성
+    # 4. Create partial function for the thread pool
     cancel_partial = partial(cancel_single_batch, client=client)
 
     cancelled_count = 0
     skipped_done_count = 0
     error_count = 0
 
-    # 5. thread_map을 사용하여 병렬 실행
+    # 5. Execute in parallel using thread_map
     results = thread_map(
         cancel_partial,
         valid_jobs,
@@ -165,7 +166,7 @@ def main():
         desc="Cancelling jobs"
     )
 
-    # 6. 결과 집계
+    # 6. Aggregate results
     print("\n--- Individual Job Results ---")
     for result in results:
         status = result["status"]
@@ -179,7 +180,7 @@ def main():
             error_count += 1
             print(f"✗ Error:     {result['key']} (ID: {result['id']}) - Reason: {result['reason']}")
 
-    # 7. 최종 요약
+    # 7. Final summary
     total_skipped = skipped_no_id_count + skipped_done_count
     print("\n" + "=" * 80)
     print("Cancellation process finished.")

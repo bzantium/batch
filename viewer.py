@@ -15,6 +15,7 @@ app = Flask(__name__)
 current_dataset = None
 dataset_path = None
 available_datasets = []  # List of available dataset paths
+sample_size = None  # Number of rows to sample from datasets
 
 
 @app.route('/')
@@ -37,11 +38,10 @@ def get_available_datasets():
 @app.route('/api/load_dataset', methods=['POST'])
 def load_dataset_endpoint():
     """Load a specific dataset."""
-    global current_dataset, dataset_path
+    global current_dataset, dataset_path, sample_size
 
     data = request.get_json()
     requested_path = data.get('path')
-    split = data.get('split', 'train')
 
     if not requested_path:
         return jsonify({'error': 'No path provided'}), 400
@@ -51,7 +51,10 @@ def load_dataset_endpoint():
 
     try:
         print(f"Loading dataset from: {requested_path}")
-        current_dataset = load_dataset(requested_path, split=split)
+        current_dataset = load_dataset(requested_path, split="train")
+        if sample_size is not None:
+            current_dataset = current_dataset.take(sample_size)
+            print(f"  Sampled {sample_size} rows from dataset")
         dataset_path = requested_path
         print(f"✓ Loaded dataset with {len(current_dataset)} rows")
 
@@ -166,16 +169,17 @@ def main():
     parser = argparse.ArgumentParser(description='Web-based dataset viewer')
     parser.add_argument('--data', type=str, nargs='+', required=True,
                        help='Path(s) to dataset(s). Can specify multiple paths.')
-    parser.add_argument('--split', type=str, default='train', help='Dataset split to load (default: train)')
+    parser.add_argument('--sample', type=int, default=None, help='Number of rows to sample from the dataset (default: None)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000)')
 
     args = parser.parse_args()
 
-    global current_dataset, dataset_path, available_datasets
+    global current_dataset, dataset_path, available_datasets, sample_size
 
     # Store all available dataset paths
     available_datasets = args.data
+    sample_size = args.sample
 
     print(f"Available datasets:")
     for i, path in enumerate(available_datasets, 1):
@@ -183,10 +187,14 @@ def main():
 
     # Load the first dataset by default
     print(f"\nLoading first dataset: {available_datasets[0]}")
-    print(f"Split: {args.split}")
+    if sample_size is not None:
+        print(f"  Will sample {sample_size} rows")
 
     try:
-        current_dataset = load_dataset(available_datasets[0], split=args.split)
+        current_dataset = load_dataset(available_datasets[0], split="train")
+        if sample_size is not None:
+            current_dataset = current_dataset.take(sample_size)
+            print(f"  Sampled {sample_size} rows from dataset")
         dataset_path = available_datasets[0]
         print(f"✓ Loaded dataset with {len(current_dataset)} rows")
     except Exception as e:

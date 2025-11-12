@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import sys
 import os
+import json
 import importlib
 from pathlib import Path
 from datetime import datetime
@@ -19,7 +20,7 @@ from datasets import load_dataset, Dataset
 
 # --- Type Hinting for Pipeline Functions ---
 
-PrepareBatchInputFn = Callable[[Dataset, str, str, int], List[Dict[str, Any]]]
+PrepareBatchInputFn = Callable[[Dataset, str, str, bool, int, int], List[Dict[str, Any]]]
 
 # --- Pipeline Loading ---
 
@@ -73,18 +74,25 @@ async def run_pipeline(args: argparse.Namespace):
             sys.exit(1)
         print(f"Resuming batch job from folder: {output_dir.resolve()}")
 
-        state_file_path = output_dir / f".{base_filename}.state"
-        state = utils.load_state(str(state_file_path))
-        is_debug_from_state = state.get("is_debug", False)
-
-        if is_debug_from_state:
-            print("  ✓ Resuming in DEBUG mode (loaded from state file).")
-            is_debug = True
-        elif args.debug:
-            print("  ⚠ Warning: Resuming a non-debug run with --debug flag.")
-            is_debug = True
+        args_file_path = output_dir / "args.json"
+        if args_file_path.exists():
+            try:
+                with open(args_file_path, 'r', encoding='utf-8') as f:
+                    saved_args = json.load(f)
+                is_debug = saved_args.get("debug", False)
+                print(f"  ✓ Loaded arguments from {args_file_path}")
+                print("  ✓ Resuming in DEBUG mode (loaded from args.json)." if is_debug else "  ✓ Resuming in normal mode (loaded from args.json).")
+            except Exception as e:
+                print(f"  ⚠ Warning: Could not load args.json: {e}. Defaulting to non-debug mode.")
+                is_debug = False
         else:
+            print(f"  ⚠ Warning: args.json not found. Defaulting to non-debug mode.")
             is_debug = False
+
+        # Allow command-line --debug flag to override
+        if args.debug:
+            print("  ⚠ Overriding with --debug flag from command line.")
+            is_debug = True
 
     else:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -95,7 +103,18 @@ async def run_pipeline(args: argparse.Namespace):
         print(f"Starting new run. Outputs will be saved to: {output_dir.resolve()}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    state_file_path = output_dir / f".{base_filename}.state"
+    state_file_path = output_dir / "state.json"
+
+    # Save arguments to args.json for new runs
+    if not args.resume:
+        args_file_path = output_dir / "args.json"
+        args_dict = vars(args)
+        try:
+            with open(args_file_path, 'w', encoding='utf-8') as f:
+                json.dump(args_dict, f, indent=2, ensure_ascii=False)
+            print(f"✓ Saved arguments to {args_file_path}")
+        except Exception as e:
+            print(f"  ⚠ Warning: Could not save args.json: {e}")
 
     print("=" * 80)
     print(f"OpenAI Batch Translation Pipeline to Korean")
@@ -135,6 +154,7 @@ async def run_pipeline(args: argparse.Namespace):
         max_requests_per_batch=args.max_requests_per_batch,
         check_interval=args.check_interval,
         chunk_max_length=args.chunk_max_length,
+        enable_chunk=args.enable_chunk,
         is_debug=is_debug
     )
 
@@ -196,16 +216,23 @@ def main():
 
     # --- Batch Job Arguments ---
     parser.add_argument(
+        '--disable-chunk',
+        action="store_false",
+        dest="enable_chunk",
+        default=True,
+        help="Disable content chunking. By default, chunking is enabled when text exceeds chunk-max-length."
+    )
+    parser.add_argument(
         '--chunk-max-length',
         type=int,
-        default=4000,
-        help="Maximum character length for content chunking (default: 4000)."
+        default=3000,
+        help="Maximum character length for content chunking (default: 3000). Chunking is enabled by default."
     )
     parser.add_argument(
         '--check-interval',
         type=int,
-        default=60,
-        help="Interval (seconds) to check batch status (default: 60)."
+        default=180,
+        help="Interval (seconds) to check batch status (default: 180)."
     )
     parser.add_argument(
         '--max-requests-per-batch',

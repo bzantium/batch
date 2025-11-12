@@ -221,24 +221,25 @@ def _extract_shard(idx: int, num_shards: int, dataset: Dataset, out_dirpath: str
     except Exception as e:
         print(f"Error saving shard {idx}: {e}")
 
+def calculate_proper_shard_count(dataset_size_in_bytes):
+    MiB = 1024 * 1024 # 1 Mebibyte = 1024 * 1024 bytes
+    return math.ceil(dataset_size_in_bytes / (256 * MiB))
+
 def save_translated_dataset(dataset: Dataset, output_dirpath: Path, original_dataset_path: str) -> None:
     """
     Saves the translated dataset into sharded .zst.parquet files,
-    matching the shard count of the original dataset.
+    with shard count calculated based on dataset size (256 MiB per shard).
     """
     os.makedirs(output_dirpath, exist_ok=True)
     print(f"\nSaving translated dataset (as Parquet shards) to {output_dirpath}...")
 
-    # Count the number of shards in the original dataset path
+    # Calculate the number of shards based on dataset size
     try:
-        shard_files = glob.glob(f"{original_dataset_path}/*.parquet")
-        num_shards = len(shard_files)
-        if num_shards == 0:
-            print(f"  ✗ Warning: No source parquet files found at {original_dataset_path}. Defaulting to 1 shard.")
-            num_shards = 1
-        print(f"  Matching original shard count: {num_shards}")
+        dataset_size_in_bytes = dataset._estimate_nbytes()
+        num_shards = calculate_proper_shard_count(dataset_size_in_bytes)
+        print(f"  Calculated shard count: {num_shards} (dataset size: {dataset_size_in_bytes / (1024**3):.2f} GB)")
     except Exception as e:
-        print(f"  ✗ Error counting source shards: {e}. Defaulting to 1 shard.")
+        print(f"  ✗ Error calculating shard count: {e}. Defaulting to 1 shard.")
         num_shards = 1
 
     # Use process_map for parallel, CPU-bound Parquet saving
@@ -532,6 +533,7 @@ async def run_batch_pipeline(
     max_requests_per_batch: int,
     check_interval: int,
     chunk_max_length: int,
+    enable_chunk: bool,
     is_debug: bool = False,
 ):
     """
@@ -572,7 +574,9 @@ async def run_batch_pipeline(
                 dataset=dataset,
                 model=model,
                 reasoning_effort=reasoning_effort,
-                chunk_max_length=chunk_max_length
+                enable_chunk=enable_chunk,
+                chunk_max_length=chunk_max_length,
+                max_completion_tokens=max_completion_tokens
             )
 
             # 1b. (Common) Split and save batch files in parallel (I/O-bound)
@@ -684,6 +688,7 @@ async def run_batch_pipeline(
 
             while pending_batches or download_tasks:
                 completed_this_round = []
+                finalizing_count_this_round = 0
                 # 1. Check status of pending jobs
                 for batch_idx, batch_key, batch_id in pending_batches:
                     try:

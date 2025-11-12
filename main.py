@@ -105,6 +105,62 @@ async def run_pipeline(args: argparse.Namespace):
     output_dir.mkdir(parents=True, exist_ok=True)
     state_file_path = output_dir / "state.json"
 
+    # --- Handle --retry logic ---
+    if args.resume and args.retry:
+        print("\n" + "=" * 80)
+        print("Processing --retry command...")
+        print(f"Loading state file: {state_file_path}")
+
+        try:
+            state = utils.load_state(str(state_file_path))
+            original_batches_state = state.get("batches", {})
+
+            if not original_batches_state:
+                print("  No 'batches' found in state file. Nothing to retry.")
+
+            else:
+                new_batches_state = {}
+                retried_count = 0
+                kept_count = 0
+
+                for batch_key, batch_info in original_batches_state.items():
+                    # *** MODIFIED BLOCK ***
+                    # Keep batches that are already downloaded OR completed and just need downloading
+                    if batch_info.get("status") in ["completed", "downloaded"]:
+                        new_batches_state[batch_key] = batch_info
+                        kept_count += 1
+                    else:
+                        # Don't add it to the new state, effectively resetting it
+                        print(f"  - Resetting batch: {batch_key} (status: {batch_info.get('status', 'N/A')})")
+                        retried_count += 1
+                    # *** END MODIFIED BLOCK ***
+
+                state["batches"] = new_batches_state
+
+                # Also reset the main pipeline status if it was completed,
+                # so the pipeline doesn't exit early.
+                if state.get("status") == "completed":
+                    print("  - Resetting main pipeline status from 'completed' to allow retry.")
+                    # By deleting the status, it will no longer be "completed"
+                    # and the main pipeline in utils.py will run.
+                    del state["status"]
+
+                utils.save_state(str(state_file_path), state)
+
+                print(f"\n  ✓ Kept {kept_count} 'completed' or 'downloaded' batches.")
+                print(f"  ✓ Reset {retried_count} other batches (failed, in_progress, etc.) for retry.")
+                print("  ✓ State file updated. Proceeding with pipeline.")
+
+        except Exception as e:
+            print(f"  ✗ Error processing retry: {e}")
+            print("  Proceeding without retry state modification...")
+
+        print("=" * 80)
+    elif args.retry and not args.resume:
+        print("\n⚠ Warning: --retry flag was specified without --resume. "
+              "The --retry flag only has an effect when resuming a job.")
+    # --- END: Handle --retry logic ---
+
     # Save arguments to args.json for new runs
     if not args.resume:
         args_file_path = output_dir / "args.json"
@@ -259,6 +315,11 @@ def main():
         default=None,
         metavar="FOLDER_PATH",
         help="Resume a batch job from the state file in this folder."
+    )
+    parser.add_argument(
+        '--retry',
+        action="store_true",
+        help="When used with --resume, reset all non-downloaded batches and retry them."
     )
 
     # --- Execute ---

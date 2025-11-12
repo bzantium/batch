@@ -43,18 +43,20 @@ def create_translation_prompt_with_tool_calls(
     """
     intro, output_rules = _get_common_rules()
 
-    translation_rules = """Translation Rules:
+    translation_rules = f"""Translation Rules:
 1.  All technical identifiers (e.g., function names, variable names, class names) must remain in English.
 2.  All function arguments and parameters (e.g., `vin_number`, `user_id`) must remain in English.
 3.  All technical acronyms and API-related terms (e.g., VIN, PPSR, DMV, API) must remain in English.
 4.  Code snippets, JSON structures, and technical formats must not be altered.
 5.  Units of measurement (e.g., 287m, 0.5m/pixel) must be preserved in their original format.
-6.  All formatting, including line breaks, markdown (e.g., `![Heightmap](...)`), and whitespace, must be preserved."""
+6.  All formatting, including line breaks, markdown (e.g., `![Heightmap](...)`), and whitespace, must be preserved.
+7.  Pay close attention to the `function.name` and `function.parameters` in the following tool JSON.
+---
+Tool JSON:
+{tools_json}
+---"""
 
     system_prompt = f"""{intro}\n{output_rules}\n{translation_rules}"""
-
-    if tools_json:
-        system_prompt += f"\n\nReference: Pay close attention to the `function.name` and `function.parameters` in this JSON.\n\nTool JSON:\n{tools_json}"
     return system_prompt
 
 def create_translation_prompt_without_tool_calls() -> str:

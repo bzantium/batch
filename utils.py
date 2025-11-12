@@ -268,6 +268,14 @@ def save_translated_dataset(dataset: Dataset, output_dirpath: Path, original_dat
         print(f"  Total records: {len(dataset)}")
         print(f"  Total shards: {num_shards}")
 
+        with open(f"{output_dirpath}/stats.json", "w") as io:
+            json.dump(
+                {"num_rows": len(dataset)},
+                io,
+                indent=4,
+                ensure_ascii=False,
+            )
+
     except Exception as e:
         print(f"\n✗ Error during parallel shard saving: {e}")
         import traceback

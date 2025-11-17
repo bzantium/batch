@@ -52,7 +52,7 @@ def load_dataset_endpoint():
     try:
         print(f"Loading dataset from: {requested_path}")
         current_dataset = load_dataset(requested_path, split="train")
-        if sample_size is not None:
+        if sample_size is not None and len(current_dataset) > sample_size:
             current_dataset = current_dataset.take(sample_size)
             print(f"  Sampled {sample_size} rows from dataset")
         dataset_path = requested_path

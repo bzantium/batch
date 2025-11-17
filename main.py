@@ -107,59 +107,10 @@ async def run_pipeline(args: argparse.Namespace):
 
     # --- Handle --retry logic ---
     if args.resume and args.retry:
-        print("\n" + "=" * 80)
-        print("Processing --retry command...")
-        print(f"Loading state file: {state_file_path}")
-
-        try:
-            state = utils.load_state(str(state_file_path))
-            original_batches_state = state.get("batches", {})
-
-            if not original_batches_state:
-                print("  No 'batches' found in state file. Nothing to retry.")
-
-            else:
-                new_batches_state = {}
-                retried_count = 0
-                kept_count = 0
-
-                for batch_key, batch_info in original_batches_state.items():
-                    # *** MODIFIED BLOCK ***
-                    # Keep batches that are already downloaded OR completed and just need downloading
-                    if batch_info.get("status") in ["completed", "downloaded"]:
-                        new_batches_state[batch_key] = batch_info
-                        kept_count += 1
-                    else:
-                        # Don't add it to the new state, effectively resetting it
-                        print(f"  - Resetting batch: {batch_key} (status: {batch_info.get('status', 'N/A')})")
-                        retried_count += 1
-                    # *** END MODIFIED BLOCK ***
-
-                state["batches"] = new_batches_state
-
-                # Also reset the main pipeline status if it was completed,
-                # so the pipeline doesn't exit early.
-                if state.get("status") == "completed":
-                    print("  - Resetting main pipeline status from 'completed' to allow retry.")
-                    # By deleting the status, it will no longer be "completed"
-                    # and the main pipeline in utils.py will run.
-                    del state["status"]
-
-                utils.save_state(str(state_file_path), state)
-
-                print(f"\n  ✓ Kept {kept_count} 'completed' or 'downloaded' batches.")
-                print(f"  ✓ Reset {retried_count} other batches (failed, in_progress, etc.) for retry.")
-                print("  ✓ State file updated. Proceeding with pipeline.")
-
-        except Exception as e:
-            print(f"  ✗ Error processing retry: {e}")
-            print("  Proceeding without retry state modification...")
-
-        print("=" * 80)
+        utils.process_retry_batches(str(state_file_path))
     elif args.retry and not args.resume:
         print("\n⚠ Warning: --retry flag was specified without --resume. "
               "The --retry flag only has an effect when resuming a job.")
-    # --- END: Handle --retry logic ---
 
     # Save arguments to args.json for new runs
     if not args.resume:
@@ -195,6 +146,14 @@ async def run_pipeline(args: argparse.Namespace):
         dataset = dataset.take(args.debug_count)
 
     print(f"✓ Loaded {len(dataset)} records")
+
+    if "gpt-4.1" in args.model:
+        args.max_completion_tokens = min(args.max_completion_tokens, 32768)
+    elif "gpt-5" in args.model:
+        args.max_completion_tokens = min(args.max_completion_tokens, 128000)
+    else:
+        print(f"✗ Error: Model '{args.model}' not supported.")
+        sys.exit(1)
 
     # Call the main batch pipeline function from utils
     await utils.run_batch_pipeline(
@@ -253,8 +212,9 @@ def main():
     parser.add_argument(
         '--model',
         type=str,
-        default="gpt-5-mini",
-        help="Model name (default: gpt-5-mini)."
+        default="gpt-4.1",
+        help="Model name (default: gpt-4.1).",
+        choices=["gpt-4.1", "gpt-5-mini", "gpt-5.1"],
     )
     parser.add_argument(
         '--max-completion-tokens',
@@ -265,9 +225,9 @@ def main():
     parser.add_argument(
         '--reasoning-effort',
         type=str,
-        default="low",
-        choices=["minimal", "low", "medium", "high"],
-        help="Reasoning effort for API calls (default: low)."
+        default="none",
+        choices=["none", "low", "medium", "high"],
+        help="Reasoning effort for API calls (default: none)."
     )
 
     # --- Batch Job Arguments ---
@@ -287,8 +247,8 @@ def main():
     parser.add_argument(
         '--check-interval',
         type=int,
-        default=180,
-        help="Interval (seconds) to check batch status (default: 180)."
+        default=60,
+        help="Interval (seconds) to check batch status (default: 60)."
     )
     parser.add_argument(
         '--max-requests-per-batch',
